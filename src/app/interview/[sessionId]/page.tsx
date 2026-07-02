@@ -65,6 +65,16 @@ export default function InterviewPage() {
   const [connectionState, setConnectionState] = React.useState<ConnectionState>("disconnected")
   const [isMuted, setIsMuted] = React.useState(false)
   const [duration, setDuration] = React.useState(0)
+  const [isLocalhost, setIsLocalhost] = React.useState(false)
+
+  React.useEffect(() => {
+    if (typeof window !== "undefined") {
+      setIsLocalhost(
+        window.location.hostname === "localhost" || 
+        window.location.hostname === "127.0.0.1"
+      )
+    }
+  }, [])
 
   // Fetch session details on mount
   const fetchSession = React.useCallback(async () => {
@@ -366,6 +376,24 @@ export default function InterviewPage() {
               </CardDescription>
             </CardHeader>
             <CardContent className="flex flex-col items-center justify-center py-10 space-y-8">
+              {isLocalhost && connectionState === "disconnected" && (
+                <div className="w-full bg-amber-500/10 border border-amber-500/20 text-amber-500 text-xs rounded-lg p-3 flex gap-2.5 items-start text-left">
+                  <AlertCircle className="h-4 w-4 shrink-0 mt-0.5 text-amber-500" />
+                  <div className="space-y-1">
+                    <p className="font-semibold">Local Network Tunnel Required</p>
+                    <p className="leading-normal text-muted-foreground">
+                      Because Vapi operates as a cloud service, its signaling servers cannot communicate with <code className="bg-amber-500/10 px-1 py-0.5 rounded text-amber-600 font-mono font-bold">localhost:3000</code>. 
+                      To test voice successfully, expose your port via a public tunnel:
+                    </p>
+                    <pre className="mt-1.5 p-2 bg-background/80 rounded border border-border/40 text-foreground font-mono text-[10px] w-full overflow-x-auto select-all">
+                      ngrok http 3000
+                    </pre>
+                    <p className="leading-normal text-muted-foreground mt-1">
+                      Then, access this room using the generated public ngrok URL (e.g. <code className="bg-amber-500/10 px-1 py-0.5 rounded text-amber-600 font-mono">https://xxxx.ngrok-free.app/interview/...</code>).
+                    </p>
+                  </div>
+                </div>
+              )}
               
               {/* Voice Calibration & Active Connection States */}
               <div className="h-40 w-full flex items-center justify-center relative">
