@@ -217,18 +217,40 @@ export default function InterviewPage() {
     setConnectionState("connecting")
 
     // Initialize using custom assistant configuration routing LLM back to Intervo Backend
-    vapiRef.current.start({
-      model: {
-        provider: "custom-llm",
-        url: `${window.location.origin}/api/interview/${sessionId}/chat`,
-        model: "custom",
-      },
-      voice: {
-        provider: "playht",
-        voiceId: "s3://voice-cloning-zero-shot/d9ff78bc-e0df-47cd-ad18-5415111ee8d7/original/manifest.json",
-      },
-      firstMessage: "Hello! Preparing your interview session. Please begin when you are ready.",
-    } as any)
+    const isLocalhost = 
+      window.location.hostname === "localhost" || 
+      window.location.hostname === "127.0.0.1"
+
+    if (isLocalhost) {
+      // If running on localhost, use cloud-safe settings to prevent Daily.co ejections
+      // resulting from Vapi trying to query unreachable localhost endpoints.
+      vapiRef.current.start({
+        model: {
+          provider: "openai",
+          model: "gpt-3.5-turbo",
+          systemPrompt: "You are a helpful interviewer. Wait for the candidate to speak.",
+        },
+        voice: {
+          provider: "playht",
+          voiceId: "s3://voice-cloning-zero-shot/d9ff78bc-e0df-47cd-ad18-5415111ee8d7/original/manifest.json",
+        },
+        firstMessage: "Hello! Preparing your interview session. Please begin when you are ready.",
+      } as any)
+    } else {
+      // If running on public tunnels or production, route completions to Intervo Custom LLM
+      vapiRef.current.start({
+        model: {
+          provider: "custom-llm",
+          url: `${window.location.origin}/api/interview/${sessionId}/chat`,
+          model: "custom",
+        },
+        voice: {
+          provider: "playht",
+          voiceId: "s3://voice-cloning-zero-shot/d9ff78bc-e0df-47cd-ad18-5415111ee8d7/original/manifest.json",
+        },
+        firstMessage: "Hello! Preparing your interview session. Please begin when you are ready.",
+      } as any)
+    }
   }
 
   const handleEndCall = async () => {
