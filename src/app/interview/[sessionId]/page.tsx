@@ -427,7 +427,7 @@ export default function InterviewPage() {
                 </div>
                 <div className="space-y-1">
                   <span className="text-xs text-muted-foreground uppercase tracking-wider font-semibold">Message Count</span>
-                  <p className="font-medium text-foreground">{session.messageCount} messages</p>
+                  <p className="font-medium text-foreground">{session.messageCount ?? 0} messages</p>
                 </div>
               </div>
 
