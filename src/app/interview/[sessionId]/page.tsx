@@ -3,7 +3,8 @@
 import * as React from "react"
 import { useRouter, useParams } from "next/navigation"
 import Link from "next/link"
-import { MicOff, AlertCircle, ArrowLeft, Info } from "lucide-react"
+import { Mic, MicOff, PhoneOff, AlertCircle, ArrowLeft, Volume2, Info, CheckCircle2 } from "lucide-react"
+import Vapi from "@vapi-ai/web"
 
 import { Button, buttonVariants } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -12,6 +13,10 @@ import { LoadingSpinner } from "@/components/shared/LoadingSpinner"
 import { Container } from "@/components/shared/Container"
 import { ROUTES } from "@/lib/utils/routes"
 import { cn } from "@/lib/utils/cn"
+import { toast } from "sonner"
+import { SessionStatus } from "@prisma/client"
+
+type ConnectionState = "disconnected" | "connecting" | "listening" | "speaking" | "finished"
 
 // Helpers to format enums to friendly text
 const formatInterviewType = (type: string) => {
@@ -55,29 +60,211 @@ export default function InterviewPage() {
   const [isLoading, setIsLoading] = React.useState(true)
   const [error, setError] = React.useState<string | null>(null)
 
-  React.useEffect(() => {
+  // Vapi Voice States
+  const vapiRef = React.useRef<Vapi | null>(null)
+  const [connectionState, setConnectionState] = React.useState<ConnectionState>("disconnected")
+  const [isMuted, setIsMuted] = React.useState(false)
+  const [duration, setDuration] = React.useState(0)
+
+  // Fetch session details on mount
+  const fetchSession = React.useCallback(async () => {
     if (!sessionId) return
-
-    const fetchSession = async () => {
-      try {
-        const response = await fetch(ROUTES.api.interview.detail(sessionId))
-        const data = await response.json()
-
-        if (!response.ok) {
-          throw new Error(data.error || "Failed to load interview session")
-        }
-
-        setSession(data.session)
-      } catch (err: any) {
-        console.error(err)
-        setError(err.message || "An error occurred while loading this session.")
-      } finally {
-        setIsLoading(false)
+    try {
+      const response = await fetch(ROUTES.api.interview.detail(sessionId))
+      const data = await response.json()
+      if (!response.ok) {
+        throw new Error(data.error || "Failed to load session details")
       }
+      setSession(data.session)
+    } catch (err: any) {
+      console.error(err)
+      setError(err.message || "An error occurred while loading this session.")
+    } finally {
+      setIsLoading(false)
+    }
+  }, [sessionId])
+
+  React.useEffect(() => {
+    fetchSession()
+  }, [fetchSession])
+
+  // Timer effect for elapsed interview seconds
+  React.useEffect(() => {
+    let interval: NodeJS.Timeout
+    if (connectionState === "listening" || connectionState === "speaking") {
+      interval = setInterval(() => {
+        setDuration((prev) => prev + 1)
+      }, 1000)
+    }
+    return () => clearInterval(interval)
+  }, [connectionState])
+
+  // Initialize Vapi client and bind transport events
+  React.useEffect(() => {
+    const vapiPublicKey = process.env.NEXT_PUBLIC_VAPI_PUBLIC_KEY || "placeholder-vapi-public-key"
+    const client = new Vapi(vapiPublicKey)
+    vapiRef.current = client
+
+    // Call Start event
+    client.on("call-start", async () => {
+      setConnectionState("listening")
+      toast.success("Voice channel connected", {
+        description: "Your mock interview has officially begun.",
+      })
+      // Update session status to ACTIVE in database
+      try {
+        await fetch(ROUTES.api.interview.detail(sessionId), {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ status: SessionStatus.ACTIVE }),
+        })
+        fetchSession()
+      } catch (err) {
+        console.error("Failed to update status to ACTIVE:", err)
+      }
+    })
+
+    // Call End event
+    client.on("call-end", () => {
+      setConnectionState("finished")
+      toast.info("Interview disconnected", {
+        description: "Your practice session is completed.",
+      })
+    })
+
+    // Speech events
+    client.on("speech-start", () => {
+      setConnectionState("speaking")
+    })
+
+    client.on("speech-end", () => {
+      setConnectionState("listening")
+    })
+
+    // Transcription and assistant pipeline integration
+    client.on("message", async (message: any) => {
+      // 1. Process and persist only FINAL USER transcripts
+      if (
+        message.type === "transcript" &&
+        message.transcriptType === "final" &&
+        message.role === "user"
+      ) {
+        const transcriptText = message.transcript
+        if (!transcriptText || transcriptText.trim() === "") return
+
+        try {
+          const chatResponse = await fetch(`/api/interview/${sessionId}/chat`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              role: "USER",
+              content: transcriptText,
+            }),
+          })
+
+          if (chatResponse.ok) {
+            const data = await chatResponse.json()
+            // 2. Play placeholder assistant response through the WebRTC transport
+            if (data.content && vapiRef.current) {
+              vapiRef.current.say(data.content)
+            }
+            fetchSession()
+          }
+        } catch (err) {
+          console.error("Failed to persist conversation message:", err)
+        }
+      }
+    })
+
+    // Error handling
+    client.on("error", async (err) => {
+      console.error("Vapi client error:", err)
+      setConnectionState("disconnected")
+      toast.error("Voice connection error", {
+        description: err.message || "Failed to communicate with Vapi server.",
+      })
+
+      // Mark session as ABANDONED in the database
+      try {
+        await fetch(ROUTES.api.interview.detail(sessionId), {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ status: SessionStatus.ABANDONED }),
+        })
+        fetchSession()
+      } catch (dbErr) {
+        console.error("Failed to mark session as ABANDONED:", dbErr)
+      }
+    })
+
+    // Cleanup resources on unmount
+    return () => {
+      client.stop()
+    }
+  }, [sessionId, fetchSession])
+
+  const handleStartCall = () => {
+    if (!vapiRef.current) return
+
+    const vapiPublicKey = process.env.NEXT_PUBLIC_VAPI_PUBLIC_KEY
+    if (!vapiPublicKey || vapiPublicKey === "placeholder-vapi-public-key") {
+      toast.error("Vapi Configuration Missing", {
+        description: "Please set NEXT_PUBLIC_VAPI_PUBLIC_KEY in your environment configuration.",
+      })
+      return
     }
 
-    fetchSession()
-  }, [sessionId])
+    setConnectionState("connecting")
+
+    // Initialize using custom assistant configuration routing LLM back to Intervo Backend
+    vapiRef.current.start({
+      model: {
+        provider: "custom-llm",
+        url: `${window.location.origin}/api/interview/${sessionId}/chat`,
+        model: "custom",
+      },
+      voice: {
+        provider: "playht",
+        voiceId: "s3://voice-cloning-zero-shot/d9ff78bc-e0df-47cd-ad18-5415111ee8d7/original/manifest.json",
+      },
+      firstMessage: "Hello! Preparing your interview session. Please begin when you are ready.",
+    } as any)
+  }
+
+  const handleEndCall = async () => {
+    if (vapiRef.current) {
+      vapiRef.current.stop()
+    }
+    setConnectionState("finished")
+
+    // Update status to COMPLETED and save total duration
+    try {
+      await fetch(ROUTES.api.interview.detail(sessionId), {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          status: SessionStatus.COMPLETED,
+          duration,
+        }),
+      })
+      fetchSession()
+    } catch (err) {
+      console.error("Failed to complete session status update:", err)
+    }
+  }
+
+  const toggleMute = () => {
+    if (!vapiRef.current) return
+    const nextMute = !isMuted
+    vapiRef.current.setMuted(nextMute)
+    setIsMuted(nextMute)
+  }
+
+  const formatDuration = (seconds: number) => {
+    const mins = Math.floor(seconds / 60)
+    const secs = seconds % 60
+    return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`
+  }
 
   if (isLoading) {
     return (
@@ -158,17 +345,65 @@ export default function InterviewPage() {
             </CardHeader>
             <CardContent className="flex flex-col items-center justify-center py-10 space-y-8">
               
-              {/* Voice Calibration / Disabled Mic Area */}
+              {/* Voice Calibration & Active Connection States */}
               <div className="h-40 w-full flex items-center justify-center relative">
-                <div className="text-center text-sm text-muted-foreground flex flex-col items-center gap-2 p-6 border border-dashed border-border/60 rounded-xl bg-muted/10 w-full max-w-md">
-                  <div className="h-14 w-14 rounded-full bg-muted flex items-center justify-center border border-border/40 mb-2">
-                    <MicOff className="h-6 w-6 text-muted-foreground/60" />
+                {connectionState === "disconnected" && (
+                  <div className="text-center text-sm text-muted-foreground flex flex-col items-center gap-2 p-6 border border-dashed border-border/60 rounded-xl bg-muted/10 w-full max-w-md">
+                    <div className="h-14 w-14 rounded-full bg-muted flex items-center justify-center border border-border/40 mb-2">
+                      <MicOff className="h-6 w-6 text-muted-foreground/60" />
+                    </div>
+                    <span className="font-semibold text-foreground">Voice Assistant Offline</span>
+                    <span className="text-xs text-muted-foreground text-center leading-relaxed">
+                      Voice connection will be initialized in the next implementation phase.
+                    </span>
                   </div>
-                  <span className="font-semibold text-foreground">Waiting to Connect...</span>
-                  <span className="text-xs text-muted-foreground text-center leading-relaxed">
-                    Voice connection will be initialized in the next implementation phase.
-                  </span>
-                </div>
+                )}
+
+                {connectionState === "connecting" && (
+                  <div className="flex flex-col items-center gap-3">
+                    <LoadingSpinner size="lg" />
+                    <span className="text-sm text-muted-foreground animate-pulse font-medium">
+                      Establishing audio transport...
+                    </span>
+                  </div>
+                )}
+
+                {(connectionState === "listening" || connectionState === "speaking") && (
+                  <div className="flex flex-col items-center justify-center w-full space-y-4">
+                    {/* Visual Pulse Waves */}
+                    <div className="flex items-center justify-center h-24 w-24 rounded-full bg-muted/40 border border-border/40 relative">
+                      <Volume2 className="h-8 w-8 text-foreground" />
+                      {connectionState === "speaking" && (
+                        <span className="absolute inline-flex h-full w-full rounded-full bg-foreground/5 animate-ping opacity-75" />
+                      )}
+                    </div>
+                    
+                    <div className="text-center">
+                      <span className="text-2xl font-mono font-medium tracking-wider">
+                        {formatDuration(duration)}
+                      </span>
+                      <p className="text-xs text-muted-foreground mt-1 uppercase tracking-widest font-semibold flex items-center justify-center gap-1.5">
+                        <span className={cn(
+                          "h-2 w-2 rounded-full",
+                          connectionState === "listening" ? "bg-emerald-500 animate-pulse" : "bg-blue-500"
+                        )} />
+                        {connectionState === "listening" ? "Candidate Speaking (Listening)" : "Interviewer Speaking (Speaking)"}
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {connectionState === "finished" && (
+                  <div className="text-center text-sm text-muted-foreground flex flex-col items-center gap-2 p-6 border border-dashed border-emerald-500/20 rounded-xl bg-emerald-500/5 w-full max-w-md">
+                    <div className="h-14 w-14 rounded-full bg-emerald-500/10 flex items-center justify-center border border-emerald-500/20 mb-2">
+                      <CheckCircle2 className="h-6 w-6 text-emerald-600" />
+                    </div>
+                    <span className="font-semibold text-foreground text-emerald-500">Interview Finished</span>
+                    <span className="text-xs text-muted-foreground text-center leading-relaxed">
+                      Your conversation history has been securely persisted in the database.
+                    </span>
+                  </div>
+                )}
               </div>
 
               {/* Session Configuration Metadata List */}
@@ -191,8 +426,8 @@ export default function InterviewPage() {
                   </p>
                 </div>
                 <div className="space-y-1">
-                  <span className="text-xs text-muted-foreground uppercase tracking-wider font-semibold">Interviewer AI</span>
-                  <p className="font-medium text-foreground">Intervo Orchestrator v1</p>
+                  <span className="text-xs text-muted-foreground uppercase tracking-wider font-semibold">Message Count</span>
+                  <p className="font-medium text-foreground">{session.messageCount} messages</p>
                 </div>
               </div>
 
@@ -200,16 +435,61 @@ export default function InterviewPage() {
               <div className="w-full bg-muted/20 border border-border/40 rounded-lg p-4 flex gap-3 text-xs text-muted-foreground leading-relaxed">
                 <Info className="h-5 w-5 text-muted-foreground shrink-0 mt-0.5" />
                 <div className="space-y-1">
-                  <p className="font-semibold text-foreground font-outfit">Next Phase Instructions</p>
-                  <p>In the next phase, the microphone will request browser permissions to establish a secure real-time WebRTC audio connection to our Vapi/OpenAI orchestrator service.</p>
+                  <p className="font-semibold text-foreground font-outfit">Microphone & Connection Status</p>
+                  <p>Speak clearly. When you stop speaking, the system transcribes your voice and persists the conversation. Toggle mute or click End Interview when finished.</p>
                 </div>
               </div>
 
-              {/* Call Controls Placeholder */}
+              {/* Call Controls */}
               <div className="flex items-center justify-center gap-4 w-full pt-4">
-                <Button disabled size="lg" className="w-full max-w-xs h-12">
-                  Voice Assistant Offline
-                </Button>
+                {connectionState === "disconnected" && (
+                  <Button onClick={handleStartCall} size="lg" className="w-full max-w-xs h-12">
+                    Start Voice Call
+                  </Button>
+                )}
+
+                {connectionState === "connecting" && (
+                  <Button disabled size="lg" className="w-full max-w-xs h-12">
+                    Connecting...
+                  </Button>
+                )}
+
+                {(connectionState === "listening" || connectionState === "speaking") && (
+                  <>
+                    <Button
+                      variant="outline"
+                      size="lg"
+                      onClick={toggleMute}
+                      className={cn(
+                        "h-12 w-12 p-0 rounded-full border-border/60",
+                        isMuted && "bg-destructive/10 text-destructive border-destructive/20 hover:bg-destructive/20"
+                      )}
+                    >
+                      {isMuted ? <MicOff className="h-5 w-5" /> : <Mic className="h-5 w-5" />}
+                    </Button>
+                    <Button
+                      variant="destructive"
+                      size="lg"
+                      onClick={handleEndCall}
+                      className="h-12 px-6 rounded-full font-medium"
+                    >
+                      <PhoneOff className="mr-2 h-4 w-4" />
+                      End Interview
+                    </Button>
+                  </>
+                )}
+
+                {connectionState === "finished" && (
+                  <Link
+                    href={ROUTES.dashboard}
+                    className={cn(
+                      buttonVariants({ variant: "default", size: "lg" }),
+                      "w-full max-w-xs h-12 flex items-center justify-center font-semibold"
+                    )}
+                  >
+                    Return to Dashboard
+                  </Link>
+                )}
               </div>
 
             </CardContent>
