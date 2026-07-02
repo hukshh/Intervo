@@ -222,7 +222,6 @@ export default function InterviewPage() {
         provider: "custom-llm",
         url: `${window.location.origin}/api/interview/${sessionId}/chat`,
         model: "custom",
-        stream: false,
       },
       voice: {
         provider: "playht",
