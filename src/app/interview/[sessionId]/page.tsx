@@ -207,7 +207,7 @@ export default function InterviewPage() {
     if (!vapiRef.current) return
 
     const vapiPublicKey = process.env.NEXT_PUBLIC_VAPI_PUBLIC_KEY
-    if (!vapiPublicKey || vapiPublicKey === "placeholder-vapi-public-key") {
+    if (!vapiPublicKey) {
       toast.error("Vapi Configuration Missing", {
         description: "Please set NEXT_PUBLIC_VAPI_PUBLIC_KEY in your environment configuration.",
       })
