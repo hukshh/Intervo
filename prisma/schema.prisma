@@ -6,11 +6,58 @@ generator client {
   provider = "prisma-client-js"
 }
 
+enum InterviewType {
+  BEHAVIORAL
+  TECHNICAL
+  SYSTEM_DESIGN
+  HR
+}
+
+enum ExperienceLevel {
+  JUNIOR
+  MID
+  SENIOR
+}
+
+enum SessionStatus {
+  CREATED
+  ACTIVE
+  COMPLETED
+  ABANDONED
+}
+
+enum InterviewStage {
+  INTRODUCTION
+  BACKGROUND
+  COMMUNICATION
+  PROBLEM_SOLVING
+  LEADERSHIP
+  CONFLICT_RESOLUTION
+  REFLECTION
+  CLOSING
+}
+
 model User {
-  id        String   @id @default(cuid())
+  id        String             @id @default(cuid())
   fullName  String
-  email     String   @unique
+  email     String             @unique
   password  String
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  sessions  InterviewSession[]
+  createdAt DateTime           @default(now())
+  updatedAt DateTime           @updatedAt
+}
+
+model InterviewSession {
+  id              String          @id @default(cuid())
+  userId          String
+  user            User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  interviewType   InterviewType
+  experienceLevel ExperienceLevel
+  status          SessionStatus   @default(CREATED)
+  currentStage    InterviewStage  @default(INTRODUCTION)
+  startedAt       DateTime        @default(now())
+  endedAt         DateTime?
+  duration        Int?
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
 }
