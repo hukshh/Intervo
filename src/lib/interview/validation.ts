@@ -1,11 +1,10 @@
 import { z } from "zod"
-import { InterviewType, ExperienceLevel } from "@prisma/client"
 
 export const createInterviewSchema = z.object({
-  interviewType: z.nativeEnum(InterviewType, {
+  interviewType: z.enum(["BEHAVIORAL", "TECHNICAL", "SYSTEM_DESIGN", "HR"], {
     message: "Invalid interview type. Allowed: BEHAVIORAL, TECHNICAL, SYSTEM_DESIGN, HR",
   }),
-  experienceLevel: z.nativeEnum(ExperienceLevel, {
+  experienceLevel: z.enum(["JUNIOR", "MID", "SENIOR"], {
     message: "Invalid experience level. Allowed: JUNIOR, MID, SENIOR",
   }),
 })
