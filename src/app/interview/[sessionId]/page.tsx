@@ -157,16 +157,16 @@ export default function InterviewPage() {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-              role: "USER",
-              content: transcriptText,
+              messages: [{ role: "user", content: transcriptText }],
             }),
           })
 
           if (chatResponse.ok) {
             const data = await chatResponse.json()
+            const assistantReply = data.choices?.[0]?.message?.content
             // 2. Play placeholder assistant response through the WebRTC transport
-            if (data.content && vapiRef.current) {
-              vapiRef.current.say(data.content)
+            if (assistantReply && vapiRef.current) {
+              vapiRef.current.say(assistantReply)
             }
             fetchSession()
           }
@@ -222,6 +222,7 @@ export default function InterviewPage() {
         provider: "custom-llm",
         url: `${window.location.origin}/api/interview/${sessionId}/chat`,
         model: "custom",
+        stream: false,
       },
       voice: {
         provider: "playht",

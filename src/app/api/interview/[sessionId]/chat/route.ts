@@ -4,15 +4,20 @@ import { getSession } from "@/lib/auth/session"
 import { z } from "zod"
 import { MessageRole } from "@prisma/client"
 
-const chatMessageSchema = z.object({
-  role: z.enum(["USER", "ASSISTANT", "SYSTEM"]),
+// Zod validation matching the official OpenAI Chat Completions request format
+const openaiMessageSchema = z.object({
+  role: z.string(),
   content: z.string().min(1),
+})
+
+const chatCompletionsSchema = z.object({
+  messages: z.array(openaiMessageSchema).min(1),
 })
 
 /**
  * POST /api/interview/[sessionId]/chat
- * Authenticates user, verifies ownership, registers candidate transcript,
- * generates a placeholder response, and stores both sequentially.
+ * Implements the official OpenAI-compatible Chat Completions endpoint.
+ * Accepts { messages } and returns { choices: [ { message } ] }.
  */
 export async function POST(
   request: Request,
@@ -39,7 +44,7 @@ export async function POST(
     }
 
     const body = await request.json()
-    const result = chatMessageSchema.safeParse(body)
+    const result = chatCompletionsSchema.safeParse(body)
     if (!result.success) {
       return NextResponse.json(
         { error: "Validation failed", details: result.error.flatten().fieldErrors },
@@ -47,31 +52,33 @@ export async function POST(
       )
     }
 
-    const { role, content } = result.data
+    const { messages } = result.data
 
-    // 1. Resolve current maximum sequence value for messages in this session
-    const lastMessage = await prisma.conversationMessage.findFirst({
-      where: { sessionId },
-      orderBy: { sequence: "desc" },
-    })
-    const nextSequence = lastMessage ? lastMessage.sequence + 1 : 1
+    // Locate the user's latest message in the transcript stream
+    const userMessages = messages.filter((m) => m.role === "user")
+    const lastUserMessage = userMessages[userMessages.length - 1]
 
-    // 2. Persist message and generate placeholder if role === USER
-    if (role === MessageRole.USER) {
-      // Save user transcript message
+    const assistantPlaceholder = "Thank you for your response. The interview engine will process this conversation in the next phase."
+
+    if (lastUserMessage && lastUserMessage.content) {
+      // 1. Get current maximum sequence number for this session's messages
+      const lastMessage = await prisma.conversationMessage.findFirst({
+        where: { sessionId },
+        orderBy: { sequence: "desc" },
+      })
+      const nextSequence = lastMessage ? lastMessage.sequence + 1 : 1
+
+      // 2. Persist the USER message
       await prisma.conversationMessage.create({
         data: {
           sessionId,
           sequence: nextSequence,
           role: MessageRole.USER,
-          content,
+          content: lastUserMessage.content,
         },
       })
 
-      // Generate assistant placeholder
-      const assistantPlaceholder = "Thank you for your response. The interview engine will process this conversation in the next phase."
-      
-      // Save assistant placeholder message
+      // 3. Persist the ASSISTANT placeholder message
       await prisma.conversationMessage.create({
         data: {
           sessionId,
@@ -81,49 +88,33 @@ export async function POST(
         },
       })
 
-      // Increment InterviewSession messageCount by 2
+      // 4. Increment the messageCount in InterviewSession by 2
       await prisma.interviewSession.update({
         where: { id: sessionId },
         data: {
           messageCount: { increment: 2 },
         },
       })
-
-      return NextResponse.json(
-        {
-          role: "ASSISTANT",
-          content: assistantPlaceholder,
-        },
-        { status: 200 }
-      )
     }
 
-    // For other roles (e.g. system setup), store single message and increment counter
-    const storedMsg = await prisma.conversationMessage.create({
-      data: {
-        sessionId,
-        sequence: nextSequence,
-        role,
-        content,
-      },
-    })
-
-    await prisma.interviewSession.update({
-      where: { id: sessionId },
-      data: {
-        messageCount: { increment: 1 },
-      },
-    })
-
+    // Return the official OpenAI completions structure back to Vapi
     return NextResponse.json(
       {
-        role: storedMsg.role,
-        content: storedMsg.content,
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: assistantPlaceholder,
+            },
+            finish_reason: "stop",
+          },
+        ],
       },
       { status: 200 }
     )
   } catch (error) {
-    console.error("Chat persistence error:", error)
+    console.error("Chat completions error:", error)
     return NextResponse.json(
       { error: "Internal server error" },
       { status: 500 }
