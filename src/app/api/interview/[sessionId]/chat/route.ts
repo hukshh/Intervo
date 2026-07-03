@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server"
 import prisma from "@/lib/db/prisma"
-import { getSession } from "@/lib/auth/session"
 import { z } from "zod"
 import { MessageRole } from "@prisma/client"
 
@@ -24,11 +23,6 @@ export async function POST(
   { params }: { params: Promise<{ sessionId: string }> }
 ) {
   try {
-    const user = await getSession()
-    if (!user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
-    }
-
     const { sessionId } = await params
 
     const session = await prisma.interviewSession.findUnique({
@@ -37,10 +31,6 @@ export async function POST(
 
     if (!session) {
       return NextResponse.json({ error: "Session not found" }, { status: 404 })
-    }
-
-    if (session.userId !== user.id) {
-      return NextResponse.json({ error: "Access denied" }, { status: 403 })
     }
 
     const body = await request.json()
