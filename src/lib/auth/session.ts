@@ -1,4 +1,4 @@
-import { cookies } from "next/headers"
+import { cookies, headers } from "next/headers"
 import { verifyToken } from "./jwt"
 import prisma from "@/lib/db/prisma"
 
@@ -52,9 +52,15 @@ export async function getSession(): Promise<SessionUser | null> {
  */
 export async function setSessionCookie(token: string): Promise<void> {
   const cookieStore = await cookies()
+  const headersList = await headers()
+  
+  // Enable the Secure flag in production OR if proxied through an HTTPS tunnel (e.g. localtunnel)
+  const isHttps = headersList.get("x-forwarded-proto") === "https"
+  const isSecure = process.env.NODE_ENV === "production" || isHttps
+
   cookieStore.set(COOKIE_NAME, token, {
     httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
+    secure: isSecure,
     sameSite: "lax",
     path: "/",
     maxAge: 60 * 60 * 24 * 7, // 7 days
